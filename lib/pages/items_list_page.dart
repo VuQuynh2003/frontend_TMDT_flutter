@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:debt_manager_app/services/product_service.dart';
+import '../widgets/action_buttons.dart';
+import '../widgets/form_dialog.dart';
 
 class ItemsListPage extends StatefulWidget {
   const ItemsListPage({super.key});
@@ -9,30 +12,320 @@ class ItemsListPage extends StatefulWidget {
 }
 
 class _ItemsListPageState extends State<ItemsListPage> {
-  // Dữ liệu mẫu cho giao diện
-  late final List<Map<String, dynamic>> items;
-  String searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
+  final ProductService _productService = ProductService();
+  List<Map<String, dynamic>> products = [];
+  List<Map<String, dynamic>> filteredProducts = [];
+  bool isLoading = true;
+  bool _isSelectionMode = false;
+  final Set<int> _selectedProducts = {};
 
   @override
   void initState() {
     super.initState();
-    items = [
-      {'name': 'Laptop Dell XPS 13', 'price': 25000000, 'quantity': 5},
-      {'name': 'iPhone 14 Pro', 'price': 30000000, 'quantity': 3},
-      {'name': 'Samsung Galaxy S23', 'price': 22000000, 'quantity': 4},
-      {'name': 'MacBook Pro M2', 'price': 35000000, 'quantity': 2},
-    ];
+    _loadProducts();
+    _searchController.addListener(_filterProducts);
   }
 
-  List<Map<String, dynamic>> get filteredItems {
-    if (searchQuery.isEmpty) return items;
-    return items
-        .where(
-          (item) => item['name'].toString().toLowerCase().contains(
-            searchQuery.toLowerCase(),
+  // Phương thức tải danh sách sản phẩm
+  Future<void> _loadProducts() async {
+    try {
+      final data = await _productService.getProducts();
+      setState(() {
+        products = data;
+        filteredProducts = data;
+        isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error loading products: ${e.toString()}')),
+      );
+    }
+  }
+
+  void _filterProducts() {
+    final query = _searchController.text.toLowerCase();
+    setState(() {
+      filteredProducts =
+          products
+              .where((product) => product['name'].toLowerCase().contains(query))
+              .toList();
+    });
+  }
+
+  // Phương thức xoá các sản phẩm đã chọn
+  Future<void> _deleteSelectedProducts() async {
+    if (_selectedProducts.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No products selected')));
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
           ),
-        )
-        .toList();
+          title: const Text(
+            'Confirm Delete',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Color.fromARGB(255, 14, 19, 29),
+            ),
+          ),
+          content: Text(
+            'Are you sure you want to delete ${_selectedProducts.length} selected products?',
+            style: const TextStyle(color: Colors.black87),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Color.fromARGB(255, 16, 80, 98)),
+              ),
+            ),
+            TextButton(
+              onPressed: () async {
+                try {
+                  Navigator.pop(context);
+                  showDialog(
+                    context: context,
+                    barrierDismissible: false,
+                    builder: (BuildContext context) {
+                      return const Center(
+                        child: CircularProgressIndicator(
+                          color: Color.fromARGB(255, 16, 80, 98),
+                        ),
+                      );
+                    },
+                  );
+
+                  final List<String> productIds =
+                      _selectedProducts
+                          .map((index) => products[index]['id'].toString())
+                          .toList();
+
+                  await _productService.deleteMultipleProducts(productIds);
+                  Navigator.pop(context);
+
+                  setState(() {
+                    final List<int> sortedIndices =
+                        _selectedProducts.toList()
+                          ..sort((a, b) => b.compareTo(a));
+
+                    for (final index in sortedIndices) {
+                      products.removeAt(index);
+                    }
+
+                    _selectedProducts.clear();
+                    _isSelectionMode = false;
+                    _filterProducts();
+                  });
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Products deleted successfully'),
+                    ),
+                  );
+                } catch (e) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Error: ${e.toString()}')),
+                  );
+                }
+              },
+              child: const Text('Delete', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showAddProductDialog() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return FormDialog(
+          title: 'Add New Product',
+          submitButtonText: 'Add',
+          fields: [
+            const CustomFormField(
+              name: 'name',
+              label: 'Product Name',
+              hint: 'Enter product name',
+              icon: Icons.inventory_2,
+            ),
+            const CustomFormField(
+              name: 'description',
+              label: 'Description',
+              hint: 'Enter product description',
+              icon: Icons.description,
+            ),
+            CustomFormField(
+              name: 'price',
+              label: 'Price',
+              hint: 'Enter product price',
+              icon: Icons.attach_money,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Please enter a price';
+                }
+                if (double.tryParse(value) == null) {
+                  return 'Please enter a valid number';
+                }
+                return null;
+              },
+            ),
+          ],
+          onCancel: () => Navigator.pop(context),
+          onSubmit: (values) async {
+            try {
+              Navigator.pop(context);
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (BuildContext context) {
+                  return const Center(
+                    child: CircularProgressIndicator(
+                      color: Color.fromARGB(255, 16, 80, 98),
+                    ),
+                  );
+                },
+              );
+
+              final newProduct = await _productService.addProduct(
+                values['name']!,
+                values['description']!,
+                double.parse(values['price']!),
+              );
+
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Product added successfully')),
+              );
+
+              setState(() {
+                products.add(newProduct);
+                _filterProducts();
+              });
+            } catch (e) {
+              Navigator.pop(context);
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+            }
+          },
+        );
+      },
+    );
+  }
+
+  void _showEditProductDialog(Map<String, dynamic> product, int index) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return FormDialog(
+          title: 'Edit Product',
+          submitButtonText: 'Save',
+          initialValues: {
+            'name': product['name'],
+            'description': product['description'] ?? '',
+            'price': product['price'].toString(),
+          },
+          fields: [
+            const CustomFormField(
+              name: 'name',
+              label: 'Product Name',
+              hint: 'Enter product name',
+              icon: Icons.inventory_2,
+            ),
+            const CustomFormField(
+              name: 'description',
+              label: 'Description',
+              hint: 'Enter product description',
+              icon: Icons.description,
+            ),
+            CustomFormField(
+              name: 'price',
+              label: 'Price',
+              hint: 'Enter product price',
+              icon: Icons.attach_money,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Please enter a price';
+                }
+                if (double.tryParse(value) == null) {
+                  return 'Please enter a valid number';
+                }
+                return null;
+              },
+            ),
+          ],
+          onCancel: () => Navigator.pop(context),
+          onSubmit: (values) async {
+            try {
+              Navigator.pop(context);
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (BuildContext context) {
+                  return const Center(
+                    child: CircularProgressIndicator(
+                      color: Color.fromARGB(255, 16, 80, 98),
+                    ),
+                  );
+                },
+              );
+
+              final updatedProduct = {
+                ...product,
+                'name': values['name'],
+                'description': values['description'],
+                'price': double.parse(values['price']!),
+              };
+
+              await _productService.updateProduct(updatedProduct);
+
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Product updated successfully')),
+              );
+
+              setState(() {
+                products[index] = updatedProduct;
+                _filterProducts();
+              });
+            } catch (e) {
+              Navigator.pop(context);
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+            }
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   @override
@@ -42,7 +335,7 @@ class _ItemsListPageState extends State<ItemsListPage> {
       appBar: AppBar(
         backgroundColor: const Color.fromARGB(255, 14, 19, 29),
         title: const Text(
-          'Items List',
+          'Products List',
           style: TextStyle(
             color: Colors.white,
             fontSize: 24,
@@ -55,152 +348,235 @@ class _ItemsListPageState extends State<ItemsListPage> {
         ),
       ),
       body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Stack(
           children: [
-            // Thanh tìm kiếm
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 10,
-                      offset: const Offset(0, 5),
-                    ),
-                  ],
-                ),
-                child: TextField(
-                  onChanged: (value) {
-                    setState(() {
-                      searchQuery = value;
-                    });
-                  },
-                  decoration: const InputDecoration(
-                    hintText: 'Tìm kiếm mặt hàng...',
-                    prefixIcon: Icon(Icons.search),
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: Colors.white,
+                      hintText: 'Search by name',
+                      hintStyle: const TextStyle(color: Colors.grey),
+                      prefixIcon: const Icon(Icons.search, color: Colors.grey),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16.0),
-              child: Text(
-                'All Items',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
+                Expanded(
+                  child: Container(
+                    color: Colors.white,
+                    child:
+                        isLoading
+                            ? const Center(
+                              child: CircularProgressIndicator(
+                                color: Color.fromARGB(255, 16, 80, 98),
+                              ),
+                            )
+                            : ListView.builder(
+                              itemCount: filteredProducts.length,
+                              itemBuilder: (context, index) {
+                                final product = filteredProducts[index];
+                                final originalIndex = products.indexOf(product);
+
+                                return InkWell(
+                                  onTap: () {
+                                    if (_isSelectionMode) {
+                                      setState(() {
+                                        if (_selectedProducts.contains(
+                                          originalIndex,
+                                        )) {
+                                          _selectedProducts.remove(
+                                            originalIndex,
+                                          );
+                                        } else {
+                                          _selectedProducts.add(originalIndex);
+                                        }
+                                      });
+                                    } else {
+                                      Navigator.pushNamed(
+                                        context,
+                                        '/item_detail',
+                                        arguments: product,
+                                      );
+                                    }
+                                  },
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16.0,
+                                      vertical: 8.0,
+                                    ),
+                                    child: Container(
+                                      padding: const EdgeInsets.all(16.0),
+                                      decoration: BoxDecoration(
+                                        color:
+                                            _selectedProducts.contains(
+                                                  originalIndex,
+                                                )
+                                                ? Colors.blue.withOpacity(0.1)
+                                                : Colors.white,
+                                        borderRadius: BorderRadius.circular(12),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.grey.withOpacity(0.2),
+                                            spreadRadius: 2,
+                                            blurRadius: 5,
+                                            offset: const Offset(0, 3),
+                                          ),
+                                        ],
+                                        border:
+                                            _selectedProducts.contains(
+                                                  originalIndex,
+                                                )
+                                                ? Border.all(color: Colors.blue)
+                                                : null,
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          if (_isSelectionMode)
+                                            Checkbox(
+                                              value: _selectedProducts.contains(
+                                                originalIndex,
+                                              ),
+                                              onChanged: (bool? value) {
+                                                setState(() {
+                                                  if (value == true) {
+                                                    _selectedProducts.add(
+                                                      originalIndex,
+                                                    );
+                                                  } else {
+                                                    _selectedProducts.remove(
+                                                      originalIndex,
+                                                    );
+                                                  }
+                                                });
+                                              },
+                                              activeColor: const Color.fromARGB(
+                                                255,
+                                                16,
+                                                80,
+                                                98,
+                                              ),
+                                            ),
+                                          Container(
+                                            width: 40,
+                                            height: 40,
+                                            decoration: BoxDecoration(
+                                              color: const Color.fromARGB(
+                                                255,
+                                                16,
+                                                80,
+                                                98,
+                                              ).withOpacity(0.1),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                            ),
+                                            child: const Icon(
+                                              Icons.inventory_2,
+                                              color: Color.fromARGB(
+                                                255,
+                                                16,
+                                                80,
+                                                98,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 16),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  product['name'],
+                                                  style: const TextStyle(
+                                                    fontSize: 18,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.black87,
+                                                  ),
+                                                ),
+                                                if (product['description'] !=
+                                                    null)
+                                                  Text(
+                                                    product['description'],
+                                                    style: const TextStyle(
+                                                      fontSize: 14,
+                                                      color: Colors.grey,
+                                                    ),
+                                                  ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  'Price: ${product['price']}',
+                                                  style: const TextStyle(
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Color.fromARGB(
+                                                      255,
+                                                      16,
+                                                      80,
+                                                      98,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          if (!_isSelectionMode)
+                                            IconButton(
+                                              icon: const Icon(
+                                                Icons.edit,
+                                                color: Color.fromARGB(
+                                                  255,
+                                                  16,
+                                                  80,
+                                                  98,
+                                                ),
+                                                size: 20,
+                                              ),
+                                              onPressed:
+                                                  () => _showEditProductDialog(
+                                                    product,
+                                                    originalIndex,
+                                                  ),
+                                              tooltip: 'Edit Product',
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                  ),
                 ),
-              ),
+              ],
             ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: Container(
-                color: Colors.white,
-                child: ListView.builder(
-                  itemCount: filteredItems.length,
-                  itemBuilder: (context, index) {
-                    final item = filteredItems[index];
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16.0,
-                        vertical: 8.0,
-                      ),
-                      child: Container(
-                        padding: const EdgeInsets.all(16.0),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.grey.withOpacity(0.2),
-                              spreadRadius: 2,
-                              blurRadius: 5,
-                              offset: const Offset(0, 3),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.blue.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const Icon(
-                                Icons.shopping_bag,
-                                color: Colors.blue,
-                                size: 24,
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: GestureDetector(
-                                onTap: () {
-                                  Navigator.pushNamed(
-                                    context,
-                                    '/item_detail',
-                                    arguments: item,
-                                  );
-                                },
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      item['name'],
-                                      style: const TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.black87,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'Price: ${NumberFormat.currency(locale: 'vi_VN', symbol: '₫').format(item['price'])}',
-                                      style: const TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.grey,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'Quantity: ${item['quantity']}',
-                                      style: const TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.grey,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
+            ActionButtons(
+              isSelectionMode: _isSelectionMode,
+              onDeleteSelected: _deleteSelectedProducts,
+              onAdd: _showAddProductDialog,
+              onToggleSelection: () {
+                setState(() {
+                  if (_isSelectionMode) {
+                    _isSelectionMode = false;
+                    _selectedProducts.clear();
+                  } else {
+                    _isSelectionMode = true;
+                  }
+                });
+              },
+              rightBtnTag: "itemsRightBtn",
+              leftBtnTag: "itemsLeftBtn",
             ),
           ],
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // TODO: Xử lý khi nhấn nút thêm mặt hàng
-        },
-        backgroundColor: const Color.fromARGB(255, 14, 19, 29),
-        child: const Icon(Icons.add, color: Colors.white),
       ),
     );
   }
