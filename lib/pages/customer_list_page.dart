@@ -22,6 +22,19 @@ class _CustomerListPageState extends State<CustomerListPage> {
   int _currentPage = 0;
   int _totalPages = 0;
   int _totalItems = 0;
+  late ScaffoldMessengerState _scaffoldMessenger;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _scaffoldMessenger = ScaffoldMessenger.of(context);
+  }
+
+  void _showSnackBar(String message) {
+    if (mounted) {
+      _scaffoldMessenger.showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
 
   @override
   void initState() {
@@ -55,9 +68,7 @@ class _CustomerListPageState extends State<CustomerListPage> {
         isLoading = false;
         _errorMessage = 'Không thể tải danh sách khách hàng: ${e.toString()}';
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_errorMessage ?? 'Lỗi không xác định')),
-      );
+      _showSnackBar(_errorMessage ?? 'Lỗi không xác định');
     }
   }
 
@@ -89,9 +100,7 @@ class _CustomerListPageState extends State<CustomerListPage> {
   Future<void> _deleteSelectedCustomers() async {
     if (_selectedCustomers.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Vui lòng chọn khách hàng cần xóa')),
-      );
+      _showSnackBar('Vui lòng chọn khách hàng cần xóa');
       return;
     }
 
@@ -174,15 +183,11 @@ class _CustomerListPageState extends State<CustomerListPage> {
                   });
 
                   if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Xóa khách hàng thành công')),
-                  );
+                  _showSnackBar('Xóa khách hàng thành công');
                 } catch (e) {
                   if (!mounted) return;
                   Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Lỗi: ${e.toString()}')),
-                  );
+                  _showSnackBar('Lỗi: ${e.toString()}');
                 }
               },
               child: const Text('Xóa', style: TextStyle(color: Colors.red)),
@@ -226,9 +231,7 @@ class _CustomerListPageState extends State<CustomerListPage> {
           onSubmit: (values) async {
             if (values == null) {
               if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Dữ liệu không hợp lệ')),
-              );
+              _showSnackBar('Dữ liệu không hợp lệ');
               return;
             }
 
@@ -263,9 +266,7 @@ class _CustomerListPageState extends State<CustomerListPage> {
 
               if (!mounted) return;
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Thêm khách hàng thành công')),
-              );
+              _showSnackBar('Thêm khách hàng thành công');
 
               setState(() {
                 customers.add(newCustomer);
@@ -274,9 +275,7 @@ class _CustomerListPageState extends State<CustomerListPage> {
             } catch (e) {
               if (!mounted) return;
               Navigator.pop(context);
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(SnackBar(content: Text('Lỗi: ${e.toString()}')));
+              _showSnackBar('Lỗi: ${e.toString()}');
             }
           },
         );
@@ -322,9 +321,7 @@ class _CustomerListPageState extends State<CustomerListPage> {
           onSubmit: (values) async {
             if (values == null) {
               if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Dữ liệu không hợp lệ')),
-              );
+              _showSnackBar('Dữ liệu không hợp lệ');
               return;
             }
 
@@ -362,9 +359,7 @@ class _CustomerListPageState extends State<CustomerListPage> {
 
               if (!mounted) return;
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Cập nhật thông tin thành công')),
-              );
+              _showSnackBar('Cập nhật thông tin thành công');
 
               setState(() {
                 customers[index] = updatedCustomer;
@@ -373,9 +368,7 @@ class _CustomerListPageState extends State<CustomerListPage> {
             } catch (e) {
               if (!mounted) return;
               Navigator.pop(context);
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(SnackBar(content: Text('Lỗi: ${e.toString()}')));
+              _showSnackBar('Lỗi: ${e.toString()}');
             }
           },
         );

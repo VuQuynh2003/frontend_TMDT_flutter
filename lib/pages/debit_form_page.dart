@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'dart:async';
+import '../services/customer_search_service.dart';
+import '../services/customer_service.dart';
 
 class DebitFormPage extends StatefulWidget {
   const DebitFormPage({super.key});
@@ -16,8 +21,23 @@ class _DebitFormPageState extends State<DebitFormPage> {
   final _keywordController = TextEditingController();
   final _paidAmountController = TextEditingController();
   final _totalAmountController = TextEditingController();
+  final _searchController = TextEditingController();
+  final _customerSearchService = CustomerSearchService();
   bool _isFromCustomerList = false;
   bool _isEditingTotal = false;
+  String? _selectedUserId;
+  List<Map<String, dynamic>> _customers = [];
+  bool _isLoading = false;
+  bool _isLoadingMore = false;
+  Timer? _debounce;
+  BuildContext? _dialogContext;
+  late ScaffoldMessengerState _scaffoldMessenger;
+  int _currentPage = 0;
+  int _totalPages = 0;
+  String _currentSearchKeyword = '';
+  bool _showSearchResults = false;
+  final LayerLink _layerLink = LayerLink();
+  OverlayEntry? _overlayEntry;
 
   // Dữ liệu mẫu cho danh sách mặt hàng
   final List<Map<String, dynamic>> _items = [
@@ -33,71 +53,177 @@ class _DebitFormPageState extends State<DebitFormPage> {
   }
 
   @override
-  void initState() {
-    super.initState();
-    _totalAmountController.text = _calculatedTotalAmount.toString();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _scaffoldMessenger = ScaffoldMessenger.of(context);
   }
 
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _addressController.dispose();
-    _keywordController.dispose();
-    _paidAmountController.dispose();
-    _totalAmountController.dispose();
-    super.dispose();
-  }
-
-  void _submitForm() {
-    if (_formKey.currentState!.validate()) {
-      // Chuyển về trang lịch sử nợ
-      Navigator.pushReplacementNamed(context, '/debit_history');
-      // Hiển thị thông báo thành công
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invoice added successfully')),
-      );
+  void _showSnackBar(String message) {
+    if (mounted) {
+      _scaffoldMessenger.showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
-  void _showCustomerList() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          title: const Text(
-            'Select Customer',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: Color.fromARGB(255, 14, 19, 29),
+  void _onSearchChanged(String value) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    _debounce = Timer(const Duration(milliseconds: 500), () {
+      _searchCustomers(value);
+    });
+  }
+
+  Future<void> _searchCustomers(String keyword, {bool loadMore = false}) async {
+    if (keyword.isEmpty) {
+      setState(() {
+        _customers = [];
+        _currentPage = 0;
+        _totalPages = 0;
+        _showSearchResults = false;
+      });
+      _removeOverlay();
+      return;
+    }
+
+    if (!loadMore) {
+      setState(() {
+        _isLoading = true;
+        _currentPage = 0;
+        _currentSearchKeyword = keyword;
+        _showSearchResults = true;
+      });
+    } else {
+      setState(() {
+        _isLoadingMore = true;
+      });
+    }
+
+    try {
+      final data = await _customerSearchService.searchCustomers(
+        keyword: keyword,
+        page: loadMore ? _currentPage + 1 : 0,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        if (loadMore) {
+          _customers.addAll(List<Map<String, dynamic>>.from(data['customers']));
+          _currentPage = data['currentPage'] as int;
+        } else {
+          _customers = List<Map<String, dynamic>>.from(data['customers']);
+          _currentPage = data['currentPage'] as int;
+        }
+        _totalPages = data['totalPages'] as int;
+        _isLoading = false;
+        _isLoadingMore = false;
+      });
+
+      _showOverlay();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _isLoadingMore = false;
+      });
+      _showSnackBar('Lỗi tìm kiếm: ${e.toString()}');
+    }
+  }
+
+  void _selectCustomer(Map<String, dynamic> customer) {
+    setState(() {
+      _selectedUserId = customer['id'].toString();
+      _nameController.text = customer['name'] ?? '';
+      _addressController.text = customer['address'] ?? '';
+      _keywordController.text = customer['phone'] ?? '';
+      _isFromCustomerList = true;
+      _showSearchResults = false;
+    });
+    _removeOverlay();
+  }
+
+  void _showOverlay() {
+    _removeOverlay();
+    final RenderBox renderBox = context.findRenderObject() as RenderBox;
+    final size = renderBox.size;
+
+    _overlayEntry = OverlayEntry(
+      builder:
+          (context) => Positioned(
+            width: size.width,
+            child: CompositedTransformFollower(
+              link: _layerLink,
+              showWhenUnlinked: false,
+              offset: const Offset(0, 50),
+              child: Material(
+                elevation: 4,
+                child: Container(
+                  constraints: BoxConstraints(maxHeight: size.height * 0.4),
+                  color: Colors.white,
+                  child: _buildSearchResults(),
+                ),
+              ),
             ),
           ),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: 3, // Số lượng khách hàng mẫu
-              itemBuilder: (context, index) {
-                return ListTile(
-                  title: Text('Customer ${index + 1}'),
-                  subtitle: Text('Address ${index + 1}'),
-                  onTap: () {
-                    setState(() {
-                      _nameController.text = 'Customer ${index + 1}';
-                      _addressController.text = 'Address ${index + 1}';
-                      _isFromCustomerList = true;
-                    });
-                    Navigator.pop(context);
-                  },
-                );
-              },
-            ),
+    );
+
+    Overlay.of(context).insert(_overlayEntry!);
+  }
+
+  void _removeOverlay() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+  }
+
+  Widget _buildSearchResults() {
+    if (_isLoading) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16.0),
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    if (_customers.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16.0),
+          child: Text(
+            'Không tìm thấy khách hàng',
+            style: TextStyle(color: Colors.grey),
           ),
-        );
+        ),
+      );
+    }
+
+    return NotificationListener<ScrollNotification>(
+      onNotification: (ScrollNotification scrollInfo) {
+        if (!_isLoadingMore &&
+            scrollInfo.metrics.pixels == scrollInfo.metrics.maxScrollExtent &&
+            _currentPage < _totalPages - 1) {
+          _searchCustomers(_currentSearchKeyword, loadMore: true);
+        }
+        return true;
       },
+      child: ListView.builder(
+        shrinkWrap: true,
+        itemCount: _customers.length + (_isLoadingMore ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (index == _customers.length) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(8.0),
+                child: CircularProgressIndicator(),
+              ),
+            );
+          }
+          final customer = _customers[index];
+          return ListTile(
+            title: Text(customer['name'] ?? ''),
+            subtitle: Text(customer['phone'] ?? ''),
+            onTap: () => _selectCustomer(customer),
+          );
+        },
+      ),
     );
   }
 
@@ -152,13 +278,179 @@ class _DebitFormPageState extends State<DebitFormPage> {
   }
 
   @override
+  void dispose() {
+    _nameController.dispose();
+    _addressController.dispose();
+    _keywordController.dispose();
+    _paidAmountController.dispose();
+    _totalAmountController.dispose();
+    _searchController.dispose();
+    _debounce?.cancel();
+    _dialogContext = null;
+    _removeOverlay();
+    super.dispose();
+  }
+
+  void _showCustomerSearchDialog() {
+    final searchController = TextEditingController();
+    final layerLink = LayerLink();
+    OverlayEntry? overlayEntry;
+    bool isLoading = false;
+    List<Map<String, dynamic>> customers = [];
+    int currentPage = 0;
+    int totalPages = 0;
+    String currentSearchKeyword = '';
+    Timer? debounce;
+
+    void showOverlay(BuildContext context) {
+      final RenderBox renderBox = context.findRenderObject() as RenderBox;
+      final size = renderBox.size;
+
+      overlayEntry = OverlayEntry(
+        builder:
+            (context) => Positioned(
+              width: size.width,
+              child: CompositedTransformFollower(
+                link: layerLink,
+                showWhenUnlinked: false,
+                offset: const Offset(0, 50),
+                child: Material(
+                  elevation: 4,
+                  child: Container(
+                    constraints: BoxConstraints(maxHeight: size.height * 0.4),
+                    color: Colors.white,
+                    child:
+                        isLoading
+                            ? const Center(child: CircularProgressIndicator())
+                            : customers.isEmpty
+                            ? const Center(
+                              child: Padding(
+                                padding: EdgeInsets.all(16.0),
+                                child: Text(
+                                  'Không tìm thấy khách hàng',
+                                  style: TextStyle(color: Colors.grey),
+                                ),
+                              ),
+                            )
+                            : ListView.builder(
+                              shrinkWrap: true,
+                              itemCount: customers.length,
+                              itemBuilder: (context, index) {
+                                final customer = customers[index];
+                                return ListTile(
+                                  title: Text(customer['name'] ?? ''),
+                                  subtitle: Text(customer['phone'] ?? ''),
+                                  onTap: () {
+                                    setState(() {
+                                      _selectedUserId =
+                                          customer['id'].toString();
+                                      _nameController.text =
+                                          customer['name'] ?? '';
+                                      _addressController.text =
+                                          customer['address'] ?? '';
+                                      _keywordController.text =
+                                          customer['phone'] ?? '';
+                                    });
+                                    overlayEntry?.remove();
+                                    Navigator.pop(context);
+                                  },
+                                );
+                              },
+                            ),
+                  ),
+                ),
+              ),
+            ),
+      );
+
+      Overlay.of(context).insert(overlayEntry!);
+    }
+
+    void onSearchChanged(String value) {
+      if (debounce?.isActive ?? false) debounce!.cancel();
+      debounce = Timer(const Duration(milliseconds: 500), () async {
+        if (value.isEmpty) {
+          overlayEntry?.remove();
+          return;
+        }
+
+        try {
+          final data = await _customerSearchService.searchCustomers(
+            keyword: value,
+            page: 0,
+          );
+
+          customers = List<Map<String, dynamic>>.from(data['customers']);
+          currentPage = data['currentPage'] as int;
+          totalPages = data['totalPages'] as int;
+          currentSearchKeyword = value;
+
+          if (overlayEntry != null) {
+            overlayEntry!.remove();
+          }
+          showOverlay(context);
+        } catch (e) {
+          _showSnackBar('Lỗi tìm kiếm: ${e.toString()}');
+        }
+      });
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          title: const Text(
+            'Tìm kiếm khách hàng',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Color.fromARGB(255, 14, 19, 29),
+            ),
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CompositedTransformTarget(
+                  link: layerLink,
+                  child: TextField(
+                    controller: searchController,
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: Colors.grey[100],
+                      hintText: 'Nhập tên hoặc số điện thoại',
+                      prefixIcon: const Icon(Icons.search),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                    onChanged: onSearchChanged,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ).then((_) {
+      debounce?.cancel();
+      overlayEntry?.remove();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color.fromARGB(255, 16, 80, 98),
       appBar: AppBar(
         backgroundColor: const Color.fromARGB(255, 14, 19, 29),
         title: const Text(
-          'New Invoice',
+          'Tạo hóa đơn mới',
           style: TextStyle(
             color: Colors.white,
             fontSize: 24,
@@ -182,7 +474,7 @@ class _DebitFormPageState extends State<DebitFormPage> {
                 Row(
                   children: [
                     const Text(
-                      'Customer Information',
+                      'Thông tin khách hàng',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 18,
@@ -191,10 +483,10 @@ class _DebitFormPageState extends State<DebitFormPage> {
                     ),
                     const Spacer(),
                     TextButton.icon(
-                      onPressed: _showCustomerList,
+                      onPressed: _showCustomerSearchDialog,
                       icon: const Icon(Icons.person_add, color: Colors.white),
                       label: const Text(
-                        'Select from list',
+                        'Thêm khách hàng',
                         style: TextStyle(color: Colors.white),
                       ),
                     ),
@@ -207,7 +499,7 @@ class _DebitFormPageState extends State<DebitFormPage> {
                   decoration: InputDecoration(
                     filled: true,
                     fillColor: Colors.white,
-                    hintText: 'Customer Name',
+                    hintText: 'Tên khách hàng',
                     hintStyle: const TextStyle(color: Colors.grey),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -216,7 +508,7 @@ class _DebitFormPageState extends State<DebitFormPage> {
                   ),
                   validator: (value) {
                     if (value == null || value.isEmpty) {
-                      return 'Please enter customer name';
+                      return 'Vui lòng nhập tên khách hàng';
                     }
                     return null;
                   },
@@ -228,7 +520,7 @@ class _DebitFormPageState extends State<DebitFormPage> {
                   decoration: InputDecoration(
                     filled: true,
                     fillColor: Colors.white,
-                    hintText: 'Address',
+                    hintText: 'Địa chỉ',
                     hintStyle: const TextStyle(color: Colors.grey),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -237,19 +529,19 @@ class _DebitFormPageState extends State<DebitFormPage> {
                   ),
                   validator: (value) {
                     if (value == null || value.isEmpty) {
-                      return 'Please enter address';
+                      return 'Vui lòng nhập địa chỉ';
                     }
                     return null;
                   },
                 ),
                 const SizedBox(height: 16),
-                // Trường nhập từ khóa gợi nhớ
+                // Trường nhập số điện thoại
                 TextFormField(
                   controller: _keywordController,
                   decoration: InputDecoration(
                     filled: true,
                     fillColor: Colors.white,
-                    hintText: 'Keyword (e.g., Con ông A bà B)',
+                    hintText: 'Số điện thoại',
                     hintStyle: const TextStyle(color: Colors.grey),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -258,12 +550,12 @@ class _DebitFormPageState extends State<DebitFormPage> {
                   ),
                   validator: (value) {
                     if (value == null || value.isEmpty) {
-                      return 'Please enter a keyword';
+                      return 'Vui lòng nhập số điện thoại';
                     }
                     return null;
                   },
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 // Danh sách mặt hàng
                 Row(
                   children: [
@@ -469,5 +761,60 @@ class _DebitFormPageState extends State<DebitFormPage> {
         ),
       ),
     );
+  }
+
+  void _submitForm() async {
+    if (_formKey.currentState!.validate()) {
+      try {
+        // Nếu chưa có userId, tạo khách hàng mới và lấy ID
+        if (_selectedUserId == null) {
+          final customerService = CustomerService();
+          // Tạo khách hàng mới
+          await customerService.addCustomer(
+            _nameController.text,
+            _addressController.text,
+            _keywordController.text,
+          );
+
+          // Tìm kiếm khách hàng vừa tạo để lấy ID
+          final searchResult = await _customerSearchService.searchCustomers(
+            keyword: _keywordController.text,
+            page: 0,
+          );
+
+          final customers = List<Map<String, dynamic>>.from(
+            searchResult['customers'],
+          );
+          if (customers.isNotEmpty) {
+            // Lấy khách hàng đầu tiên tìm thấy (vì số điện thoại là unique)
+            _selectedUserId = customers[0]['id'].toString();
+          } else {
+            throw Exception('Không tìm thấy thông tin khách hàng sau khi tạo');
+          }
+        }
+
+        // Tạo dữ liệu để gửi lên server
+        final formData = {
+          'userId': _selectedUserId,
+          'name': _nameController.text,
+          'address': _addressController.text,
+          'phone': _keywordController.text,
+          'items': _items,
+          'totalAmount': _totalAmountController.text,
+          'paidAmount': _paidAmountController.text,
+        };
+
+        // TODO: Gửi dữ liệu lên server
+        print('Form data: $formData');
+
+        // Chuyển về trang lịch sử nợ
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, '/debit_history');
+          _showSnackBar('Thêm hóa đơn thành công');
+        }
+      } catch (e) {
+        _showSnackBar('Lỗi: ${e.toString()}');
+      }
+    }
   }
 }

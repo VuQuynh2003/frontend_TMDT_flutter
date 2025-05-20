@@ -11,6 +11,19 @@ class DebitHistoryPage extends StatefulWidget {
 class _DebitHistoryPageState extends State<DebitHistoryPage> {
   // Dữ liệu mẫu cho giao diện
   late final List<Map<String, dynamic>> debits;
+  late ScaffoldMessengerState _scaffoldMessenger;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _scaffoldMessenger = ScaffoldMessenger.of(context);
+  }
+
+  void _showSnackBar(String message) {
+    if (mounted) {
+      _scaffoldMessenger.showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
 
   @override
   void initState() {
